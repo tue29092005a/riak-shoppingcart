@@ -1,0 +1,116 @@
+
+networks:
+  riak-net:
+    driver: bridge
+
+services:
+  riak-node-1:
+    image: basho/riak-kv:latest
+    container_name: riak-node-1
+    hostname: riak-node-1           # CRITICAL: sets Erlang node name to riak@riak-node-1
+    environment:
+      - CLUSTER_NAME=riakcluster
+      - COORDINATOR_NODE=riak-node-1
+    ports:
+      - "8098:8098"   # HTTP API
+      - "8087:8087"   # Protocol Buffers
+    networks:
+      riak-net:
+        aliases:
+          - riak-node-1
+    healthcheck:
+      # "riak ping" is Riak's built-in connectivity test — no curl required.
+      # Returns 0 (pong) when Erlang VM + distribution are fully up.
+      # start_period gives Riak time to boot (Erlang takes 60-90s on first run).
+      test: ["CMD", "riak", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    volumes:
+      - riak-data-1:/var/lib/riak
+
+  riak-node-2:
+    image: basho/riak-kv:latest
+    container_name: riak-node-2
+    hostname: riak-node-2
+    environment:
+      - CLUSTER_NAME=riakcluster
+      - COORDINATOR_NODE=riak-node-1
+    ports:
+      - "8198:8098"
+      - "8187:8087"
+    networks:
+      riak-net:
+        aliases:
+          - riak-node-2
+    # Use service_started (not service_healthy) so docker compose up -d returns immediately.
+    # The setup-cluster.sh script handles all real readiness waiting via HTTP /ping.
+    depends_on:
+      riak-node-1:
+        condition: service_started
+    volumes:
+      - riak-data-2:/var/lib/riak
+
+  riak-node-3:
+    image: basho/riak-kv:latest
+    container_name: riak-node-3
+    hostname: riak-node-3
+    environment:
+      - CLUSTER_NAME=riakcluster
+      - COORDINATOR_NODE=riak-node-1
+    ports:
+      - "8298:8098"
+      - "8287:8087"
+    networks:
+      riak-net:
+        aliases:
+          - riak-node-3
+    depends_on:
+      riak-node-1:
+        condition: service_started
+    volumes:
+      - riak-data-3:/var/lib/riak
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: riak-backend
+    environment:
+      - RIAK_NODE1_HOST=riak-node-1
+      - RIAK_NODE2_HOST=riak-node-2
+      - RIAK_NODE3_HOST=riak-node-3
+      - RIAK_PB_PORT=8087
+      - RIAK_HTTP_PORT=8098
+      - PORT=3001
+    ports:
+      - "3001:3001"
+    networks:
+      - riak-net
+    # Backend starts after containers are up; it retries connections internally
+    depends_on:
+      riak-node-1:
+        condition: service_started
+      riak-node-2:
+        condition: service_started
+      riak-node-3:
+        condition: service_started
+    restart: on-failure
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: riak-frontend
+    ports:
+      - "3000:80"
+    networks:
+      - riak-net
+    depends_on:
+      - backend
+
+volumes:
+  riak-data-1:
+  riak-data-2:
+  riak-data-3:
